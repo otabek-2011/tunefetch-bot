@@ -66,6 +66,7 @@ YDL_OPTIONS = {
 
 def search_music(query):
     results = []
+    # SoundCloud qidiruvi
     try:
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
             info = ydl.extract_info(f"scsearch5:{query}", download=False)
@@ -80,6 +81,7 @@ def search_music(query):
     except Exception as e:
         logging.error(f"SoundCloud error: {e}")
 
+    # Fallback (Piped API)
     if not results:
         try:
             resp = requests.get(f"https://pipedapi.kavin.rocks/search?q={query}&filter=music_songs", timeout=5)
@@ -96,16 +98,39 @@ def search_music(query):
 
     return results
 
-def download_audio(url, output_path):
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': output_path,
-        'quiet': True,
-        'no_warnings': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+def download_audio_file(url, title, output_path):
+    # 1. yt-dlp orqali yuklashga urinish
+    try:
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': output_path,
+            'quiet': True,
+            'no_warnings': True,
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return True
+    except Exception as e:
+        logging.warning(f"yt-dlp download failed (DRM or block), trying fallback stream: {e}")
+
+    # 2. DRM xatosi bo'lsa, ochiq Stream API orqali ko'chirish
+    try:
+        clean_title = title.replace(" ", "+")
+        stream_url = f"https://api.vagalume.com.br/search.php" # zaxira ochiq oqim uchun
+        resp = requests.get(f"https://yt-stream-api.vercel.app/api/dl?query={clean_title}", timeout=10)
+        if resp.status_code == 200 and resp.json().get("url"):
+            audio_url = resp.json().get("url")
+            r = requests.get(audio_url, stream=True, timeout=15)
+            with open(output_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            return True
+    except Exception as fallback_err:
+        logging.error(f"Fallback stream error: {fallback_err}")
+
+    return False
 
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
@@ -160,24 +185,26 @@ async def handle_download(callback: types.CallbackQuery):
 
     item = results[idx]
     url = item['id']
+    title = item.get('title', 'music')
     file_path = f"music_{callback.from_user.id}.mp3"
 
     await callback.message.edit_text(TEXTS[lang]['downloading'])
 
-    try:
-        download_audio(url, file_path)
-        
-        audio_file = types.FSInputFile(file_path)
-        await callback.message.answer_audio(audio=audio_file, title=item.get('title'))
-        await callback.message.delete()
+    success = download_audio_file(url, title, file_path)
 
-    except Exception as e:
-        logging.error(f"Download error: {e}")
+    if success and os.path.exists(file_path):
+        try:
+            audio_file = types.FSInputFile(file_path)
+            await callback.message.answer_audio(audio=audio_file, title=title)
+            await callback.message.delete()
+        except Exception as e:
+            logging.error(f"Send audio error: {e}")
+            await callback.message.edit_text(TEXTS[lang]['error'])
+    else:
         await callback.message.edit_text(TEXTS[lang]['error'])
 
-    finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+    if os.path.exists(file_path):
+        os.remove(file_path)
 
 async def start_bot():
     await bot.delete_webhook(drop_pending_updates=True)
