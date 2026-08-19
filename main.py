@@ -1,14 +1,19 @@
 import os
 import logging
+import asyncio
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-import asyncio
 import yt_dlp
+import uvicorn
 
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+WEBHOOK_URL = f"https://tunefetch-bot-1.onrender.com{WEBHOOK_PATH}"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -81,7 +86,8 @@ async def handle_search(message: types.Message):
         'quiet': True,
         'no_warnings': True,
         'extract_flat': True,
-        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None
+        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
+        'extractor_args': {'youtube': {'player_client': ['ios', 'mweb', 'android']}}
     }
     
     try:
@@ -128,7 +134,6 @@ async def download_music(callback: types.CallbackQuery):
     title = item.get('title', 'Music')
     
     await callback.message.edit_text(TEXTS[lang]["downloading"])
-    
     os.makedirs("downloads", exist_ok=True)
     
     ydl_opts = {
@@ -137,7 +142,12 @@ async def download_music(callback: types.CallbackQuery):
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        'source_address': '0.0.0.0',
+        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['ios', 'mweb', 'android']
+            }
+        }
     }
     
     try:
@@ -164,9 +174,24 @@ async def download_music(callback: types.CallbackQuery):
         logging.error(f"Download error: {e}")
         await callback.message.edit_text(TEXTS[lang]["error"])
 
-async def main():
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
+    yield
+    await bot.delete_webhook()
+
+app = FastAPI(lifespan=lifespan)
+
+@app.post(WEBHOOK_PATH)
+async def bot_webhook(request: Request):
+    update = types.Update.model_validate(await request.json(), context={"bot": bot})
+    await dp.feed_update(bot, update)
+    return {"status": "ok"}
+
+@app.get("/")
+async def root():
+    return {"status": "bot is running"}
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
