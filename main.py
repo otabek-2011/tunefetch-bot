@@ -201,9 +201,11 @@ async def start_bot():
 
 async def main():
     port = int(os.getenv("PORT", 10000))
-    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
+    
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
     
+    # Port o'chib qolmasligi uchun ikkalasini parallel yurgazamiz
     await asyncio.gather(
         server.serve(),
         start_bot()
