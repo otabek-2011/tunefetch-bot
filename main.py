@@ -1,20 +1,20 @@
 import os
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import asyncio
 import yt_dlp
+import uvicorn
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-RENDER_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME", "")
 WEBHOOK_URL = f"https://tunefetch-bot-1.onrender.com{WEBHOOK_PATH}"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-app = FastAPI()
 
 user_langs = {}
 user_search_results = {}
@@ -168,13 +168,13 @@ async def download_music(callback: types.CallbackQuery):
         logging.error(f"Download error: {e}")
         await callback.message.edit_text(TEXTS[lang]["error"])
 
-@app.on_event("startup")
-async def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
-
-@app.on_event("shutdown")
-async def on_shutdown():
+    yield
     await bot.delete_webhook()
+
+app = FastAPI(lifespan=lifespan)
 
 @app.post(WEBHOOK_PATH)
 async def bot_webhook(request: Request):
@@ -185,3 +185,7 @@ async def bot_webhook(request: Request):
 @app.get("/")
 async def root():
     return {"status": "bot is running"}
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
