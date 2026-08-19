@@ -87,7 +87,12 @@ async def handle_search(message: types.Message):
         'no_warnings': True,
         'extract_flat': True,
         'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
-        'extractor_args': {'youtube': {'player_client': ['ios', 'mweb', 'android']}}
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['tv_embedded', 'web_creator', 'android'],
+                'player_skip': ['webpage', 'configs']
+            }
+        }
     }
     
     try:
@@ -145,7 +150,8 @@ async def download_music(callback: types.CallbackQuery):
         'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'mweb', 'android']
+                'player_client': ['tv_embedded', 'web_creator', 'android'],
+                'player_skip': ['webpage', 'configs']
             }
         }
     }
