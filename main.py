@@ -2,6 +2,8 @@ import os
 import logging
 import asyncio
 import requests
+import uvicorn
+from fastapi import FastAPI
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -15,12 +17,18 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+app = FastAPI()
+
+@app.get("/")
+async def root():
+    return {"status": "bot is running"}
+
 user_langs = {}
 user_search_results = {}
 
 TEXTS = {
     "uz": {
-        "welcome": "Salom! Musiqa nomini yoki YouTube havolasini yuboring.",
+        "welcome": "👋Salom! Musiqa nomini yoki YouTube havolasini yuboring.",
         "searching": "🔍 <b>{query}</b> qidirilmoqda...",
         "select": "Yuklab olish uchun ro'yxatdan birini tanlang:",
         "downloading": "🎵 Yuklanmoqda...",
@@ -170,12 +178,22 @@ async def download_music(callback: types.CallbackQuery):
     else:
         await callback.message.edit_text(TEXTS[lang]["error"])
 
-async def main():
+async def start_bot():
     await bot.delete_webhook(drop_pending_updates=True)
     print("\n========================================")
     print("🚀 BOT QAYTA ISHGA TUSHDI VA TAYYOR!")
     print("========================================\n")
     await dp.start_polling(bot)
+
+async def main():
+    port = int(os.getenv("PORT", 10000))
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
+    server = uvicorn.Server(config)
+    
+    await asyncio.gather(
+        server.serve(),
+        start_bot()
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
