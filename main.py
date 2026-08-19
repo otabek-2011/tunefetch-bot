@@ -129,27 +129,15 @@ async def download_music(callback: types.CallbackQuery):
     
     await callback.message.edit_text(TEXTS[lang]["downloading"])
     
-    file_path = f"downloads/{user_id}_{idx}.mp3"
     os.makedirs("downloads", exist_ok=True)
     
     ydl_opts = {
-        'format': 'bestaudio/best',
+        'format': 'm4a/bestaudio/best',
         'outtmpl': f"downloads/{user_id}_{idx}.%(ext)s",
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
         'source_address': '0.0.0.0',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'web']
-            }
-        }
     }
     
     try:
@@ -157,12 +145,21 @@ async def download_music(callback: types.CallbackQuery):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             await loop.run_in_executor(None, lambda: ydl.download([video_url]))
             
-        audio = types.FSInputFile(file_path)
-        await callback.message.answer_audio(audio, caption=f"🎵 <b>{title}</b>", parse_mode="HTML")
-        await callback.message.delete()
-        
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        downloaded_file = None
+        for file in os.listdir("downloads"):
+            if file.startswith(f"{user_id}_{idx}"):
+                downloaded_file = os.path.join("downloads", file)
+                break
+
+        if downloaded_file:
+            audio = types.FSInputFile(downloaded_file)
+            await callback.message.answer_audio(audio, caption=f"🎵 <b>{title}</b>", parse_mode="HTML")
+            await callback.message.delete()
+            if os.path.exists(downloaded_file):
+                os.remove(downloaded_file)
+        else:
+            await callback.message.edit_text(TEXTS[lang]["error"])
+
     except Exception as e:
         logging.error(f"Download error: {e}")
         await callback.message.edit_text(TEXTS[lang]["error"])

@@ -1,4 +1,4 @@
-aiogram>=3.0.0
-yt-dlp
+aiogram
 fastapi
 uvicorn
+yt-dlp>=2024.08.06
