@@ -60,14 +60,16 @@ async def start_cmd(message: types.Message):
     kb.button(text="🇬🇧 English", callback_data="lang_en")
     kb.adjust(3)
     
-    lang = get_user_lang(message.from_user.id)
-    await message.answer(TEXTS[lang]["welcome"], reply_markup=kb.as_markup())
+    await message.answer("🌐 Tilni tanlang / Select language / Выберите язык:", reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data.startswith("lang_"))
 async def set_lang(callback: types.CallbackQuery):
     lang = callback.data.split("_")[1]
-    user_langs[callback.from_user.id] = lang
+    user_id = callback.from_user.id
+    user_langs[user_id] = lang
+    
     await callback.answer(TEXTS[lang]["lang_set"], show_alert=True)
+    await callback.message.answer(TEXTS[lang]["welcome"])
 
 @dp.message(F.text)
 async def handle_search(message: types.Message):
