@@ -1,13 +1,13 @@
 import os
 import logging
 import asyncio
-import requests
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from youtubesearchpython import VideosSearch
+import yt_dlp
 import uvicorn
 
 logging.basicConfig(level=logging.INFO)
@@ -62,15 +62,12 @@ async def start_cmd(message: types.Message):
     kb.button(text="🇷🇺 Русский", callback_data="lang_ru")
     kb.button(text="🇬🇧 English", callback_data="lang_en")
     kb.adjust(3)
-    
     await message.answer("🌐 Tilni tanlang / Select language / Выберите язык:", reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data.startswith("lang_"))
 async def set_lang(callback: types.CallbackQuery):
     lang = callback.data.split("_")[1]
-    user_id = callback.from_user.id
-    user_langs[user_id] = lang
-    
+    user_langs[callback.from_user.id] = lang
     await callback.answer(TEXTS[lang]["lang_set"], show_alert=True)
     await callback.message.answer(TEXTS[lang]["welcome"])
 
@@ -118,32 +115,45 @@ async def download_music(callback: types.CallbackQuery):
         
     item = results[idx]
     video_id = item.get('id')
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
     title = item.get('title', 'Music')
     
     await callback.message.edit_text(TEXTS[lang]["downloading"])
     os.makedirs("downloads", exist_ok=True)
-    file_path = f"downloads/{user_id}_{idx}.mp3"
+    file_prefix = f"downloads/{user_id}_{idx}"
+
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': f"{file_prefix}.%(ext)s",
+        'quiet': True,
+        'no_warnings': True,
+        'nocheckcertificate': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios']
+            }
+        }
+    }
 
     try:
-        audio_url = f"https://invidious.nerdvpn.de/latest_version?id={video_id}&italic=0&quality=local"
-        
         loop = asyncio.get_event_loop()
-        def download_file():
-            r = requests.get(audio_url, stream=True, timeout=30)
-            if r.status_code == 200:
-                with open(file_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=1024*1024):
-                        f.write(chunk)
-                return True
-            return False
+        def download():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([video_url])
 
-        success = await loop.run_in_executor(None, download_file)
+        await loop.run_in_executor(None, download)
 
-        if success and os.path.exists(file_path) and os.path.getsize(file_path) > 1000:
-            audio = types.FSInputFile(file_path)
+        downloaded_file = None
+        for file in os.listdir("downloads"):
+            if file.startswith(f"{user_id}_{idx}"):
+                downloaded_file = os.path.join("downloads", file)
+                break
+
+        if downloaded_file and os.path.exists(downloaded_file):
+            audio = types.FSInputFile(downloaded_file)
             await callback.message.answer_audio(audio, caption=f"🎵 <b>{title}</b>", parse_mode="HTML")
             await callback.message.delete()
-            os.remove(file_path)
+            os.remove(downloaded_file)
         else:
             await callback.message.edit_text(TEXTS[lang]["error"])
 
