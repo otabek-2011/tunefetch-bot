@@ -7,7 +7,6 @@ from fastapi import FastAPI
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from youtubesearchpython import VideosSearch
 import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
@@ -17,18 +16,19 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# Render port talab qilgani uchun FastAPI
 app = FastAPI()
 
 @app.get("/")
 async def root():
-    return {"status": "bot is running"}
+    return {"status": "ok"}
 
 user_langs = {}
 user_search_results = {}
 
 TEXTS = {
     "uz": {
-        "welcome": "👋Salom! Musiqa nomini yoki YouTube havolasini yuboring.",
+        "welcome": "Salom! Musiqa nomini yoki YouTube havolasini yuboring.",
         "searching": "🔍 <b>{query}</b> qidirilmoqda...",
         "select": "Yuklab olish uchun ro'yxatdan birini tanlang:",
         "downloading": "🎵 Yuklanmoqda...",
@@ -59,6 +59,28 @@ TEXTS = {
 def get_user_lang(user_id):
     return user_langs.get(user_id, "uz")
 
+def search_youtube_ytdlp(query, limit=5):
+    ydl_opts = {
+        'extract_flat': True,
+        'skip_download': True,
+        'quiet': True,
+        'no_warnings': True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+            results = []
+            if info and 'entries' in info:
+                for entry in info['entries']:
+                    results.append({
+                        'id': entry.get('id'),
+                        'title': entry.get('title', 'Music Track')
+                    })
+            return results
+        except Exception as e:
+            logging.error(f"yt-dlp search error: {e}")
+            return []
+
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message):
     kb = InlineKeyboardBuilder()
@@ -83,28 +105,22 @@ async def handle_search(message: types.Message):
     
     msg = await message.answer(TEXTS[lang]["searching"].format(query=query), parse_mode="HTML")
     
-    try:
-        loop = asyncio.get_event_loop()
-        search = await loop.run_in_executor(None, lambda: VideosSearch(query, limit=5).result())
-        results = search.get('result', [])
+    loop = asyncio.get_event_loop()
+    results = await loop.run_in_executor(None, search_youtube_ytdlp, query, 5)
+    
+    if not results:
+        await msg.edit_text(TEXTS[lang]["not_found"])
+        return
         
-        if not results:
-            await msg.edit_text(TEXTS[lang]["not_found"])
-            return
-            
-        user_search_results[user_id] = results
-        kb = InlineKeyboardBuilder()
+    user_search_results[user_id] = results
+    kb = InlineKeyboardBuilder()
+    
+    for idx, item in enumerate(results):
+        title = item.get('title', f"Track {idx+1}")[:30]
+        kb.button(text=f"🎵 {title}", callback_data=f"dl_{idx}")
         
-        for idx, item in enumerate(results):
-            title = item.get('title', f"Track {idx+1}")[:30]
-            kb.button(text=f"🎵 {title}", callback_data=f"dl_{idx}")
-            
-        kb.adjust(1)
-        await msg.edit_text(TEXTS[lang]["select"], reply_markup=kb.as_markup())
-        
-    except Exception as e:
-        logging.error(f"Search error: {e}")
-        await msg.edit_text(TEXTS[lang]["error"])
+    kb.adjust(1)
+    await msg.edit_text(TEXTS[lang]["select"], reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data.startswith("dl_"))
 async def download_music(callback: types.CallbackQuery):
@@ -180,14 +196,12 @@ async def download_music(callback: types.CallbackQuery):
 
 async def start_bot():
     await bot.delete_webhook(drop_pending_updates=True)
-    print("\n========================================")
-    print("🚀 BOT QAYTA ISHGA TUSHDI VA TAYYOR!")
-    print("========================================\n")
+    print("\n🚀 BOT ISHGA TUSHDI VA TAYYOR!\n")
     await dp.start_polling(bot)
 
 async def main():
     port = int(os.getenv("PORT", 10000))
-    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
     server = uvicorn.Server(config)
     
     await asyncio.gather(
