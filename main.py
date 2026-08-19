@@ -10,7 +10,9 @@ import yt_dlp
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 RENDER_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME", "")
-WEBHOOK_URL = f"https://{RENDER_HOSTNAME}{WEBHOOK_PATH}"
+WEBHOOK_URL = f"https://tunefetch-bot-1.onrender.com{WEBHOOK_PATH}"
+
+
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
