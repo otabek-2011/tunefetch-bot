@@ -1,12 +1,13 @@
 import os
 import logging
 import asyncio
+import requests
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-import yt_dlp
+from youtubesearchpython import VideosSearch
 import uvicorn
 
 logging.basicConfig(level=logging.INFO)
@@ -81,38 +82,19 @@ async def handle_search(message: types.Message):
     
     msg = await message.answer(TEXTS[lang]["searching"].format(query=query), parse_mode="HTML")
     
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'quiet': True,
-        'no_warnings': True,
-        'extract_flat': True,
-        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['tv_embedded', 'android', 'ios'],
-                'player_skip': ['webpage', 'configs']
-            }
-        }
-    }
-    
     try:
         loop = asyncio.get_event_loop()
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            if "youtube.com" in query or "youtu.be" in query:
-                info = await loop.run_in_executor(None, lambda: ydl.extract_info(query, download=False))
-                entries = [info] if 'entries' not in info else info['entries']
-            else:
-                info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"ytsearch5:{query}", download=False))
-                entries = info.get('entries', [])
-                
-        if not entries:
+        search = await loop.run_in_executor(None, lambda: VideosSearch(query, limit=5).result())
+        results = search.get('result', [])
+        
+        if not results:
             await msg.edit_text(TEXTS[lang]["not_found"])
             return
             
-        user_search_results[user_id] = entries
+        user_search_results[user_id] = results
         kb = InlineKeyboardBuilder()
         
-        for idx, item in enumerate(entries[:5]):
+        for idx, item in enumerate(results):
             title = item.get('title', f"Track {idx+1}")[:30]
             kb.button(text=f"🎵 {title}", callback_data=f"dl_{idx}")
             
@@ -135,44 +117,33 @@ async def download_music(callback: types.CallbackQuery):
         return
         
     item = results[idx]
-    video_url = item.get('webpage_url') or f"https://www.youtube.com/watch?v={item.get('id')}"
+    video_id = item.get('id')
     title = item.get('title', 'Music')
     
     await callback.message.edit_text(TEXTS[lang]["downloading"])
     os.makedirs("downloads", exist_ok=True)
-    
-    ydl_opts = {
-        'format': 'm4a/bestaudio/best',
-        'outtmpl': f"downloads/{user_id}_{idx}.%(ext)s",
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['tv_embedded', 'android', 'ios'],
-                'player_skip': ['webpage', 'configs']
-            }
-        }
-    }
-    
-    try:
-        loop = asyncio.get_event_loop()
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            await loop.run_in_executor(None, lambda: ydl.download([video_url]))
-            
-        downloaded_file = None
-        for file in os.listdir("downloads"):
-            if file.startswith(f"{user_id}_{idx}"):
-                downloaded_file = os.path.join("downloads", file)
-                break
+    file_path = f"downloads/{user_id}_{idx}.mp3"
 
-        if downloaded_file:
-            audio = types.FSInputFile(downloaded_file)
+    try:
+        audio_url = f"https://invidious.nerdvpn.de/latest_version?id={video_id}&italic=0&quality=local"
+        
+        loop = asyncio.get_event_loop()
+        def download_file():
+            r = requests.get(audio_url, stream=True, timeout=30)
+            if r.status_code == 200:
+                with open(file_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=1024*1024):
+                        f.write(chunk)
+                return True
+            return False
+
+        success = await loop.run_in_executor(None, download_file)
+
+        if success and os.path.exists(file_path) and os.path.getsize(file_path) > 1000:
+            audio = types.FSInputFile(file_path)
             await callback.message.answer_audio(audio, caption=f"🎵 <b>{title}</b>", parse_mode="HTML")
             await callback.message.delete()
-            if os.path.exists(downloaded_file):
-                os.remove(downloaded_file)
+            os.remove(file_path)
         else:
             await callback.message.edit_text(TEXTS[lang]["error"])
 
@@ -201,4 +172,3 @@ async def root():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-    
