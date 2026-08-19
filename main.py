@@ -7,7 +7,6 @@ import uvicorn
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
 
@@ -47,6 +46,13 @@ TEXTS = {
     }
 }
 
+INVIDIOUS_INSTANCES = [
+    "https://invidious.nerdvpn.de",
+    "https://inv.us.projectsegfau.lt",
+    "https://invidious.flokinet.to",
+    "https://invidious.privacydev.net"
+]
+
 @app.get("/")
 async def root():
     return {"status": "ok"}
@@ -55,81 +61,49 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
-YDL_OPTIONS = {
-    'format': 'bestaudio/best',
-    'noplaylist': True,
-    'quiet': True,
-    'no_warnings': True,
-    'default_search': 'scsearch5',
-    'source_address': '0.0.0.0'
-}
-
 def search_music(query):
     results = []
-    # SoundCloud qidiruvi
-    try:
-        with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-            info = ydl.extract_info(f"scsearch5:{query}", download=False)
-            if 'entries' in info and info['entries']:
-                for entry in info['entries']:
-                    if entry:
-                        results.append({
-                            'id': entry.get('url') or entry.get('webpage_url'),
-                            'title': entry.get('title'),
-                            'duration': entry.get('duration')
-                        })
-    except Exception as e:
-        logging.error(f"SoundCloud error: {e}")
-
-    # Fallback (Piped API)
-    if not results:
+    for instance in INVIDIOUS_INSTANCES:
         try:
-            resp = requests.get(f"https://pipedapi.kavin.rocks/search?q={query}&filter=music_songs", timeout=5)
+            url = f"{instance}/api/v1/search?q={requests.utils.quote(query)}&type=video"
+            resp = requests.get(url, timeout=4)
             if resp.status_code == 200:
-                data = resp.json().get('items', [])
+                data = resp.json()
                 for item in data[:5]:
                     results.append({
-                        'id': f"https://www.youtube.com/watch?v={item.get('url').split('=')[-1]}",
+                        'id': item.get('videoId'),
                         'title': item.get('title'),
-                        'duration': item.get('duration')
+                        'duration': item.get('lengthSeconds')
                     })
+                if results:
+                    break
         except Exception as e:
-            logging.error(f"Fallback error: {e}")
-
+            logging.warning(f"Failed instance {instance}: {e}")
+            continue
     return results
 
-def download_audio_file(url, title, output_path):
-    # 1. yt-dlp orqali yuklashga urinish
-    try:
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': output_path,
-            'quiet': True,
-            'no_warnings': True,
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            return True
-    except Exception as e:
-        logging.warning(f"yt-dlp download failed (DRM or block), trying fallback stream: {e}")
-
-    # 2. DRM xatosi bo'lsa, ochiq Stream API orqali ko'chirish
-    try:
-        clean_title = title.replace(" ", "+")
-        stream_url = f"https://api.vagalume.com.br/search.php" # zaxira ochiq oqim uchun
-        resp = requests.get(f"https://yt-stream-api.vercel.app/api/dl?query={clean_title}", timeout=10)
-        if resp.status_code == 200 and resp.json().get("url"):
-            audio_url = resp.json().get("url")
-            r = requests.get(audio_url, stream=True, timeout=15)
-            with open(output_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            return True
-    except Exception as fallback_err:
-        logging.error(f"Fallback stream error: {fallback_err}")
-
+def download_audio_file(video_id, output_path):
+    for instance in INVIDIOUS_INSTANCES:
+        try:
+            url = f"{instance}/api/v1/videos/{video_id}"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                adaptive_formats = data.get('adaptiveFormats', [])
+                audio_streams = [f for f in adaptive_formats if f.get('type', '').startswith('audio/')]
+                
+                if audio_streams:
+                    # Eng sifatli audio havola
+                    audio_url = audio_streams[0].get('url')
+                    r = requests.get(audio_url, stream=True, timeout=20)
+                    if r.status_code == 200:
+                        with open(output_path, 'wb') as f:
+                            for chunk in r.iter_content(chunk_size=1024 * 64):
+                                f.write(chunk)
+                        return True
+        except Exception as e:
+            logging.warning(f"Download fail on {instance}: {e}")
+            continue
     return False
 
 @dp.message(Command("start"))
@@ -184,13 +158,13 @@ async def handle_download(callback: types.CallbackQuery):
         return
 
     item = results[idx]
-    url = item['id']
+    video_id = item['id']
     title = item.get('title', 'music')
     file_path = f"music_{callback.from_user.id}.mp3"
 
     await callback.message.edit_text(TEXTS[lang]['downloading'])
 
-    success = download_audio_file(url, title, file_path)
+    success = download_audio_file(video_id, file_path)
 
     if success and os.path.exists(file_path):
         try:
