@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+import requests
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types, F
@@ -120,45 +121,60 @@ async def download_music(callback: types.CallbackQuery):
     
     await callback.message.edit_text(TEXTS[lang]["downloading"])
     os.makedirs("downloads", exist_ok=True)
-    file_prefix = f"downloads/{user_id}_{idx}"
+    file_path = f"downloads/{user_id}_{idx}.mp3"
 
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': f"{file_prefix}.%(ext)s",
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios']
-            }
+    loop = asyncio.get_event_loop()
+
+    # 1-usul: Cobalt API (YouTube bot-check'ni aylanib o'tuvchi ochiq servis)
+    def download_via_cobalt():
+        try:
+            payload = {"url": video_url, "downloadMode": "audio", "audioFormat": "mp3"}
+            headers = {"Accept": "application/json", "Content-Type": "application/json"}
+            res = requests.post("https://api.cobalt.tools/", json=payload, headers=headers, timeout=15)
+            if res.status_code == 200 and "url" in res.json():
+                audio_res = requests.get(res.json()["url"], stream=True, timeout=30)
+                if audio_res.status_code == 200:
+                    with open(file_path, 'wb') as f:
+                        for chunk in audio_res.iter_content(chunk_size=1024*1024):
+                            f.write(chunk)
+                    return True
+        except Exception as e:
+            logging.error(f"Cobalt download failed: {e}")
+        return False
+
+    # 2-usul: yt-dlp Android mijoz rejimi
+    def download_via_ytdlp():
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': f"downloads/{user_id}_{idx}.%(ext)s",
+            'quiet': True,
+            'no_warnings': True,
+            'nocheckcertificate': True,
+            'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}
         }
-    }
-
-    try:
-        loop = asyncio.get_event_loop()
-        def download():
+        try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([video_url])
+            for file in os.listdir("downloads"):
+                if file.startswith(f"{user_id}_{idx}"):
+                    return os.path.join("downloads", file)
+        except Exception as e:
+            logging.error(f"YTDLP download failed: {e}")
+        return None
 
-        await loop.run_in_executor(None, download)
+    success = await loop.run_in_executor(None, download_via_cobalt)
+    downloaded_file = file_path if success else await loop.run_in_executor(None, download_via_ytdlp)
 
-        downloaded_file = None
-        for file in os.listdir("downloads"):
-            if file.startswith(f"{user_id}_{idx}"):
-                downloaded_file = os.path.join("downloads", file)
-                break
-
-        if downloaded_file and os.path.exists(downloaded_file):
+    if downloaded_file and os.path.exists(downloaded_file) and os.path.getsize(downloaded_file) > 1000:
+        try:
             audio = types.FSInputFile(downloaded_file)
             await callback.message.answer_audio(audio, caption=f"🎵 <b>{title}</b>", parse_mode="HTML")
             await callback.message.delete()
             os.remove(downloaded_file)
-        else:
+        except Exception as e:
+            logging.error(f"Send audio error: {e}")
             await callback.message.edit_text(TEXTS[lang]["error"])
-
-    except Exception as e:
-        logging.error(f"Download error: {e}")
+    else:
         await callback.message.edit_text(TEXTS[lang]["error"])
 
 @asynccontextmanager
