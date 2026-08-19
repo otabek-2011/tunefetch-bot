@@ -21,7 +21,7 @@ user_languages = {}
 
 TEXTS = {
     'uz': {
-        'start': "Salom! Musiqa nomini yoki YouTube havolasini yuboring.",
+        'start': "Salom! Musiqa nomini yuboring.",
         'searching': "🔍 Qidirilmoqda...",
         'not_found': "❌ Hech narsa topilmadi.",
         'select_song': "Musiqani tanlang:",
@@ -29,7 +29,7 @@ TEXTS = {
         'error': "Xatolik yuz berdi. Qayta urinib ko'ring."
     },
     'ru': {
-        'start': "Привет! Отправьте название музыки или ссылку на YouTube.",
+        'start': "Привет! Отправьте название музыки.",
         'searching': "🔍 Поиск...",
         'not_found': "❌ Ничего не найдено.",
         'select_song': "Выберите музыку:",
@@ -37,7 +37,7 @@ TEXTS = {
         'error': "Произошла ошибка. Попробуйте еще раз."
     },
     'en': {
-        'start': "Hello! Send the music name or YouTube link.",
+        'start': "Hello! Send the music name.",
         'searching': "🔍 Searching...",
         'not_found': "❌ Nothing found.",
         'select_song': "Select music:",
@@ -45,13 +45,6 @@ TEXTS = {
         'error': "An error occurred. Try again."
     }
 }
-
-INVIDIOUS_INSTANCES = [
-    "https://invidious.nerdvpn.de",
-    "https://inv.us.projectsegfau.lt",
-    "https://invidious.flokinet.to",
-    "https://invidious.privacydev.net"
-]
 
 @app.get("/")
 async def root():
@@ -63,47 +56,72 @@ async def health():
 
 def search_music(query):
     results = []
-    for instance in INVIDIOUS_INSTANCES:
-        try:
-            url = f"{instance}/api/v1/search?q={requests.utils.quote(query)}&type=video"
-            resp = requests.get(url, timeout=4)
-            if resp.status_code == 200:
-                data = resp.json()
-                for item in data[:5]:
+    # Piped API orqali qidirish (Render IP bloklamaydi)
+    try:
+        url = f"https://pipedapi.kavin.rocks/search?q={requests.utils.quote(query)}&filter=music_songs"
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            items = resp.json().get('items', [])
+            for item in items[:5]:
+                video_id = item.get('url', '').split('v=')[-1]
+                if video_id:
                     results.append({
-                        'id': item.get('videoId'),
+                        'id': video_id,
                         'title': item.get('title'),
-                        'duration': item.get('lengthSeconds')
+                        'uploader': item.get('uploaderName', '')
                     })
-                if results:
-                    break
-        except Exception as e:
-            logging.warning(f"Failed instance {instance}: {e}")
-            continue
+    except Exception as e:
+        logging.error(f"Search error: {e}")
     return results
 
 def download_audio_file(video_id, output_path):
-    for instance in INVIDIOUS_INSTANCES:
+    # Cobalt / Rapid Stream API
+    api_urls = [
+        f"https://api.cobalt.tools/api/json",
+        f"https://cobalt-api.kwiatek.xyz/api/json"
+    ]
+    
+    headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+    }
+    
+    payload = {
+        'url': f"https://www.youtube.com/watch?v={video_id}",
+        'downloadMode': 'audio',
+        'audioFormat': 'mp3'
+    }
+
+    for api in api_urls:
         try:
-            url = f"{instance}/api/v1/videos/{video_id}"
-            resp = requests.get(url, timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                adaptive_formats = data.get('adaptiveFormats', [])
-                audio_streams = [f for f in adaptive_formats if f.get('type', '').startswith('audio/')]
-                
-                if audio_streams:
-                    # Eng sifatli audio havola
-                    audio_url = audio_streams[0].get('url')
-                    r = requests.get(audio_url, stream=True, timeout=20)
-                    if r.status_code == 200:
+            res = requests.post(api, json=payload, headers=headers, timeout=10)
+            if res.status_code == 200:
+                audio_link = res.json().get('url')
+                if audio_link:
+                    file_res = requests.get(audio_link, stream=True, timeout=25)
+                    if file_res.status_code == 200:
                         with open(output_path, 'wb') as f:
-                            for chunk in r.iter_content(chunk_size=1024 * 64):
+                            for chunk in file_res.iter_content(chunk_size=1024 * 64):
                                 f.write(chunk)
                         return True
         except Exception as e:
-            logging.warning(f"Download fail on {instance}: {e}")
+            logging.warning(f"Cobalt API failed {api}: {e}")
             continue
+
+    # Fallback to direct stream API
+    try:
+        direct_url = f"https://yt-stream-api.vercel.app/api/dl?query={video_id}"
+        r = requests.get(direct_url, timeout=10)
+        if r.status_code == 200 and r.json().get('url'):
+            stream_link = r.json().get('url')
+            file_res = requests.get(stream_link, stream=True, timeout=20)
+            with open(output_path, 'wb') as f:
+                for chunk in file_res.iter_content(chunk_size=1024 * 64):
+                    f.write(chunk)
+            return True
+    except Exception as e:
+        logging.error(f"Fallback direct stream error: {e}")
+
     return False
 
 @dp.message(Command("start"))
