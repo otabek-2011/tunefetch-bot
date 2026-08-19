@@ -89,7 +89,7 @@ async def handle_search(message: types.Message):
         'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
         'extractor_args': {
             'youtube': {
-                'player_client': ['tv_embedded', 'web_creator', 'android'],
+                'player_client': ['tv_embedded', 'android', 'ios'],
                 'player_skip': ['webpage', 'configs']
             }
         }
@@ -150,7 +150,7 @@ async def download_music(callback: types.CallbackQuery):
         'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
         'extractor_args': {
             'youtube': {
-                'player_client': ['tv_embedded', 'web_creator', 'android'],
+                'player_client': ['tv_embedded', 'android', 'ios'],
                 'player_skip': ['webpage', 'configs']
             }
         }
@@ -201,3 +201,4 @@ async def root():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+    
